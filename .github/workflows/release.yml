@@ -33,7 +33,7 @@ jobs:
       run: |
         uv build --wheel
         uv sync --locked --group dev
-        uv run pyinstaller -F src/openbq/cli.py -n openbq
+        uv run pyinstaller -F src/openbq/cli.py -n openbq --dispatch ./bin
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
     - name: 🚀 Upload Release Assets (Wheels/EXE)
@@ -41,4 +41,4 @@ jobs:
       with:
         files: |
           dist/*.whl
-          dist/openbq
+          bin/openbq
