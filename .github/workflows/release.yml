@@ -14,20 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pypi-publish:
-    name: Build and Publish Wheel to PyPI
+  publish:
+    name: Build and Publish Wheel and Bin
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
-    steps:
-    - name: Publish package distributions to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-publish:
-    name: Build and Publish Wheel and Bin to Github Release
-    runs-on: ubuntu-latest
-    permissions:
       contents: write
     steps:
     - name: ⬇️ Checkout Repository
@@ -42,6 +34,8 @@ jobs:
         uv build --wheel
         uv sync --locked --group dev
         uv run pyinstaller -F src/openbq/cli.py -n openbq
+    - name: Publish package distributions to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
     - name: 🚀 Upload Release Assets (Wheels/EXE)
       uses: softprops/action-gh-release@v2
       with:
