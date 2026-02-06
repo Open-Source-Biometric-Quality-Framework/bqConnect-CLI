@@ -1,0 +1,629 @@
+import atexit
+import json
+import os
+import platform
+import re
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+from openbq import __package__, __version__
+
+
+def get_host_arch():
+    """Get the host system architecture."""
+    arch = platform.machine()
+    if arch in ("x86_64", "amd64", "i386"):
+        return "amd64"
+    else:
+        return arch
+
+
+def get_host_info():
+    """Get the host system info."""
+    info = {
+        "Host Platform": platform.platform(),
+        "Memory": f"{get_total_memory_mb() / 1024:.2f} GB",
+        # "Architecture": platform.machine(),
+        # "OS": platform.system(),
+        # "OS Version": platform.release(),
+        "Python Version": platform.python_version(),
+    }
+    return info
+
+
+def get_total_memory_mb():
+    """Get the total system memory in megabytes (MB)."""
+    system = platform.system()
+    try:
+        if system == "Linux":
+            result = subprocess.run(
+                ["vmstat", "-s", "-S", "M"], capture_output=True, text=True, check=True
+            )
+            match = re.search(r"(\d+)\s*M\s*total memory", result.stdout)
+            if match:
+                return int(match.group(1))
+        elif system == "Darwin":  # macOS
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return int(result.stdout.strip()) // (1024 * 1024)
+        elif system == "Windows":
+            result = subprocess.run(
+                ["wmic", "OS", "get", "TotalVisibleMemorySize", "/Value"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            match = re.search(r"TotalVisibleMemorySize=(\d+)", result.stdout)
+            if match:
+                return int(match.group(1)) // 1024
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError, TypeError):
+        print("Warning: Could not determine total system memory.", file=sys.stderr)
+    return 0
+
+
+def get_shm_size(total_memory_mb):
+    """Calculate the shared memory size (half of total memory) and format it."""
+    if total_memory_mb > 0:
+        shm_mb = total_memory_mb // 2
+        return f"{shm_mb}MB"
+    # Default to a safe size if memory could not be determined
+    return "8192MB"
+
+
+# def get_digest_from_cli(command):
+#     """
+#     Executes a Docker CLI command and extracts the image digest.
+
+#     :param command: The full command as a list (e.g., ['docker', 'manifest', 'inspect', 'image:tag']).
+#     :return: The image digest (SHA-256 hash) as a string, or None if not found/error.
+#     """
+#     try:
+#         # Run the command and capture the output
+#         result = subprocess.run(command, capture_output=True, text=True, check=True)
+
+#         # The output is a JSON string
+#         manifest_data = json.loads(result.stdout)
+
+#         # The digest is usually stored in the 'Descriptor' key for 'docker manifest inspect'
+#         # or the first element of 'RepoDigests' for a local 'docker inspect'.
+
+#         # Check for remote manifest digest
+#         if isinstance(manifest_data, dict) and "Descriptor" in manifest_data:
+#             return manifest_data["Descriptor"]["digest"]
+
+#         # Check for local image digest (which is often returned as a list of repo digests)
+#         elif (
+#             isinstance(manifest_data, list)
+#             and manifest_data
+#             and "RepoDigests" in manifest_data[0]
+#         ):
+#             # Expecting a list of digests in the format 'repo@sha256:...'
+#             return manifest_data[0]["Id"]
+
+#         # Handle the raw manifest digest if it's the only thing returned
+#         # This handles cases where docker manifest inspect returns a list of manifests for multi-arch images
+#         elif (
+#             isinstance(manifest_data, list)
+#             and manifest_data
+#             and "digest" in manifest_data[0]
+#         ):
+#             # For a multi-arch manifest list, we take the digest of the list itself
+#             return manifest_data[0].get(
+#                 "digest"
+#             )  # This is less precise but safer for general use
+
+#         # Check for remote manifest digest for multi-platform build
+#         if isinstance(manifest_data, dict) and "manifests" in manifest_data:
+#             arch = get_host_arch()
+#             for manifest in manifest_data["manifests"]:
+#                 if manifest["platform"]["architecture"] == arch:
+#                     return manifest["digest"]
+
+#         # Final fallback if parsing is tricky:
+#         if isinstance(manifest_data, dict) and "digest" in manifest_data.get(
+#             "config", {}
+#         ):
+#             return manifest_data["config"]["digest"]
+
+#     except subprocess.CalledProcessError as e:
+#         # Handles errors like "No such image" or "manifest unknown"
+#         if "No such image" in e.stderr or "manifest unknown" in e.stderr:
+#             return None
+#         print(f"Error executing command: {' '.join(command)}\n{e.stderr.strip()}")
+#         return None
+#     except json.JSONDecodeError:
+#         print("Error: Failed to parse JSON output from Docker CLI.")
+#         return None
+#     except Exception as e:
+#         print(f"An unexpected error occurred: {e}")
+#         return None
+
+
+# def check_update(image_tag) -> bool:
+#     """
+#     Checks if a newer version of the 'bq-cli' Docker image is available.
+
+#     Returns:
+#         bool: True if an update is available, False otherwise.
+#     """
+#     try:
+#         # 1. Get Local Image Digest
+#         # We use `docker inspect` with a format filter to get JSON containing RepoDigests
+#         local_command = ["docker", "inspect", image_tag, "--format", "json"]
+#         local_digest = get_digest_from_cli(local_command)
+#         digest_tag = f"{image_tag.split(':', 1)[0]}@{local_digest}"
+#         local_digest = get_digest_from_cli(
+#             ["docker", "manifest", "inspect", digest_tag],
+#         )
+
+#         # 2. Get Remote Image Digest (without pulling)
+#         # We use `docker manifest inspect` to query the registry directly
+#         remote_command = ["docker", "manifest", "inspect", image_tag]
+#         remote_digest = get_digest_from_cli(remote_command)
+
+#         print(f"Local Image Digest:  {local_digest or 'N/A'}")
+#         print(f"Remote Image Digest: {remote_digest or 'N/A'}")
+
+#         # 3. Compare Digests
+#         if local_digest is None and remote_digest is None:
+#             print(
+#                 "🛑 Neither local image nor remote manifest could be retrieved. Cannot determine status."
+#             )
+#             return True  # No image, so consider an "update" (initial pull) to be available.
+#         elif local_digest is None and remote_digest:
+#             print(
+#                 "✅ Image not found locally, but remote version exists. **New image available** (or needs initial pull)."
+#             )
+#             return True  # No image, so consider an "update" (initial pull) to be available.
+#         elif local_digest and remote_digest is None:
+#             print(
+#                 "⚠️ Local image exists, but remote manifest check failed (e.g., image deleted, auth issue). Status uncertain."
+#             )
+#             return False
+#         elif local_digest == remote_digest:
+#             print("👍 The local image is **UP-TO-DATE** with the remote registry.")
+#             return False
+#         elif local_digest != remote_digest:
+#             print("🚨 A **NEW** version of the image is available in the registry!")
+#             return True
+
+#     except (
+#         subprocess.CalledProcessError,
+#         FileNotFoundError,
+#     ):
+#         # If docker pull fails, it could be because the image doesn't exist locally yet,
+#         # or Docker isn't running. In either case, we can consider an "update" (initial pull)
+#         # to be available.
+#         return True
+
+
+def check_cli_version(package_name: str) -> bool:
+    # Get the current version of the package
+    try:
+        current_version = subprocess.check_output(
+            [sys.executable, "-m", "pip", "show", package_name],
+            stderr=subprocess.STDOUT,
+        ).decode("utf-8")
+
+        for line in current_version.splitlines():
+            if line.startswith("Version:"):
+                current_version = line.split(" ")[1]
+                break
+    except subprocess.CalledProcessError as e:
+        print(
+            f"Error getting the current version of {package_name}: {e.output.decode('utf-8')}"
+        )
+        return False
+
+    # Check for outdated packages using pip list --outdated
+    try:
+        outdated = subprocess.check_output(
+            [sys.executable, "-m", "pip", "list", "--outdated"],
+            stderr=subprocess.STDOUT,
+        ).decode("utf-8")
+
+        if package_name in outdated:
+            # Extract the latest version from the output
+            for line in outdated.splitlines():
+                if package_name in line:
+                    latest_version = line.split()[2]
+                    print(
+                        f"> A new version of '{package_name}' is available: {latest_version}. You have version {current_version}."
+                    )
+                    break
+        else:
+            print(
+                f"> The installed '{package_name}' is up-to-date (version {current_version})."
+            )
+            return False
+    except Exception as e:
+        print(f"Error checking for outdated packages: {str(e)}")
+        return False
+
+    return True
+
+
+def handle_update(image_tag, package_name="openbq"):
+    print(f"Pulling the latest '{image_tag}' image...")
+    try:
+        # Pull the image
+        subprocess.run(
+            ["docker", "pull", f"{image_tag}"],
+            check=True,
+        )
+        # # Inspect to show the version
+        # result = subprocess.run(
+        #     ["docker", "inspect", f"{image_tag}"],
+        #     capture_output=True,
+        #     text=True,
+        #     check=True,
+        # )
+        # image_info = json.loads(result.stdout)
+        # labels = image_info[0].get("Config", {}).get("Labels", {})
+        # image_version = labels.get("bq.cli.version", "not found")
+        # core_version = labels.get("bq.core.version", "not found")
+
+        # print(f"OpenBQ Service container version: {image_version}")
+        # print(f"OpenBQ Core version: {core_version}\n")
+    except subprocess.CalledProcessError as e:
+        error_output = (
+            e.stderr.strip() if e.stderr else "See the output above for details."
+        )
+        print(
+            f"Error during Docker operation: {error_output}",
+            file=sys.stderr,
+        )
+    except FileNotFoundError:
+        print(
+            "Error: 'docker' command not found. Ensure Docker is installed and in your PATH.",
+            file=sys.stderr,
+        )
+    except (json.JSONDecodeError, IndexError) as e:
+        print(f"Error parsing Docker image information: {e}", file=sys.stderr)
+
+    if not check_cli_version(package_name):
+        return
+
+    # Upgrade the package if a new version is available
+    print("Upgrading package...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--upgrade", package_name]
+        )
+        print(f"> Successfully upgrade '{package_name}'.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error upgrading '{package_name}': {e.output.decode('utf-8')}")
+
+
+def delete_image(image_tag):
+    print(f"Attempting to remove the '{image_tag}' Docker image...")
+    try:
+        subprocess.run(
+            ["docker", "rmi", image_tag], check=True, capture_output=True, text=True
+        )
+        print(f"Successfully removed image '{image_tag}'.")
+    except subprocess.CalledProcessError as e:
+        error_message = e.stderr.decode().strip()
+        if "No such image" in error_message:
+            print(f"Image '{image_tag}' not found locally.")
+        else:
+            print(f"Error removing Docker image: {error_message}", file=sys.stderr)
+            print(
+                "This might be because a container is currently using the image.",
+                file=sys.stderr,
+            )
+    except FileNotFoundError:
+        print(
+            "Error: 'docker' command not found. Ensure Docker is installed and in your PATH.",
+            file=sys.stderr,
+        )
+
+
+def _uninstall_package():
+    """Function to be called on exit to uninstall the package."""
+    try:
+        print(f"Uninstalling '{__package__}' package...")
+        # Use subprocess.run and check for errors
+        if "python" not in sys.executable:
+            print(
+                "You are probably running via EXE instead of PyPI package, no need to uninstall."
+            )
+        else:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "uninstall", "-y", __package__],
+                check=True,
+            )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to uninstall '{__package__}': {str(e)}", file=sys.stderr)
+
+
+def handle_uninstall(image_tag):
+    """Handles the uninstall process."""
+    try:
+        confirm = input(f"Are you sure you want to uninstall {__package__}? (y/N): ")
+
+        if confirm.lower() not in ("y", "yes"):
+            print("Aborted")
+            return
+
+        # Remove container image
+        confirm = input(
+            f"Are you sure you want to remove the container {image_tag} too? (y/N): "
+        )
+
+        print("Starting uninstall process...")
+
+        if confirm.lower() in ("y", "yes"):
+            delete_image(image_tag)
+
+        # Register the uninstall function to run when this script exits.
+        # This avoids issues with the script trying to delete itself while running.
+        atexit.register(_uninstall_package)
+    except (KeyboardInterrupt, EOFError):
+        print("\nAborted")
+
+
+# def handle_cli_update(image_tag):
+#     """Handles the update check and process."""
+#     print(f'Checking for updates to "{image_tag}"...')
+#     if check_update(image_tag):
+#         confirm = input("> Do you want to pull the latest? (y/N): ")
+#         if confirm.lower() in ("y", "yes"):
+#             handle_update(image_tag)
+#     else:
+#         print(f"Your '{image_tag}' image is up to date.")
+
+
+def show_version(image_tag):
+    """Displays the version of the CLI and the container image."""
+    # Version of the CLI app
+    print(f"openbq: v{__version__}")
+    # Version of the container image
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", image_tag],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        image_info = json.loads(result.stdout)
+        core_version = (
+            image_info[0]
+            .get("Config", {})
+            .get("Labels", {})
+            .get("bq.core.version", "not found")
+        )
+        image_version = (
+            image_info[0]
+            .get("Config", {})
+            .get("Labels", {})
+            .get("bq.service.version", "not found")
+        )
+        image_arch = image_info[0].get("Architecture", "not found")
+
+        print(f"bqCore: {core_version}")
+        print(f"Backend service image: {image_version}")
+        print(f"Image architecture: {image_arch}")
+
+        sys_info = get_host_info()
+        for key, value in sys_info.items():
+            print(f"{key}: {value}")
+
+        print()
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        json.JSONDecodeError,
+        IndexError,
+    ):
+        print(
+            f"Container image version: Could not determine (image '{image_tag}' not found or Docker not running).",
+            file=sys.stderr,
+        )
+
+
+def is_subdir(child: Path, parent: Path) -> bool:
+    try:
+        return child.is_relative_to(parent)
+    except ValueError:
+        return False
+
+
+def run_container(image_tag, bq_args: list[str], shm_size=None):
+    """Builds and executes the docker run command."""
+
+    # Calculate SHM size
+    if not shm_size:
+        total_mem = get_total_memory_mb()
+        shm_size = get_shm_size(total_mem)
+
+    # Build the base docker command
+    docker_cmd = ["docker", "run", "--rm", "-it", f"--shm-size={shm_size}"]
+
+    # Optional CWD for reporting
+    current_dir = Path.cwd()
+
+    # Optional prefix to reconstruct the file path
+    input_prefix = ""
+
+    # Check input folder flag
+    for item in bq_args:
+        if item in ("-I", "--input"):
+            input_path_raw = bq_args.pop(bq_args.index(item) + 1)
+            # PowerShell auto added trailing '\' will escapes the closing quote
+            if '"' in input_path_raw:
+                split_list = input_path_raw.split('"')
+                input_path_raw = split_list[0]
+                if len(split_list) > 1:
+                    bq_args.extend(split_list[1:])
+            input_path = Path(Path(input_path_raw).expanduser().resolve())
+            bq_args.remove(item)
+            break
+        input_path = None
+
+    if input_path:
+        # Sanitise input path
+        if not input_path.exists():
+            print(f"Exit. Input directory not found: {input_path_raw}")
+            sys.exit(1)
+        if not input_path.is_dir():
+            print(f"Exit. Input directory not a folder: {input_path_raw}")
+            sys.exit(1)
+        if not input_path.is_relative_to(current_dir):  # Handle '..'
+            current_dir = input_path.parent
+        elif input_path.relative_to(current_dir).as_posix() == ".":  # Handle '.'
+            current_dir = current_dir.parent
+        input_mount = input_path.relative_to(current_dir)
+        bq_args.extend(["--input", f"'{input_mount}'"])
+        volume_path = f"{input_path.resolve()}:/app/{input_mount}"
+
+        input_prefix = strip_suffix_path(Path(input_path_raw), input_mount)
+        if os.name == "nt":
+            input_prefix = input_prefix + "\\"
+        else:
+            input_prefix = input_prefix + "/"
+
+        docker_cmd.extend(["-v", volume_path])
+
+    # Check output folder flag
+    for item in bq_args:
+        if item in ("-O", "--output"):
+            output_path = (
+                Path(Path(bq_args.pop(bq_args.index(item) + 1))).expanduser().resolve()
+            )
+            bq_args.remove(item)
+            break
+        output_path = None
+
+    if output_path and not is_subdir(output_path, Path(input_path)):
+        # Sanitise output path
+        try:
+            if not output_path.exists():
+                output_path.mkdir(parents=True)
+            elif not output_path.is_dir():
+                print(f"Invalid output path: {output_path}")
+                sys.exit(1)
+        except Exception as e:
+            print("Failed to create output folder:", str(e))
+            sys.exit(1)
+
+        output_cwd = Path.cwd()
+        if not output_path.is_relative_to(output_cwd):  # Handle '..'
+            output_cwd = output_path.parent
+        elif output_path.relative_to(output_cwd).as_posix() == ".":  # Handle '.'
+            output_cwd = output_cwd.parent
+        output_mount = output_path.relative_to(output_cwd)
+
+        bq_args.extend(["--output", f"'{output_mount}'"])
+        volume_path = f"{output_path.expanduser().resolve()}:/app/{output_mount}"
+        docker_cmd.extend(["-v", volume_path])
+
+    docker_cmd.append(image_tag)
+
+    # The command to run inside the container
+    if not bq_args:
+        show_version(image_tag)
+        inner_command = ["python3 -m openbq --help"]
+    else:
+        inner_command = [
+            f"python3 -m openbq -P '{input_prefix}' -W '{current_dir.as_posix()}' {' '.join(bq_args)}"
+        ]
+    docker_cmd.extend(inner_command)
+
+    # # Check image update
+    # local_digest = get_digest_from_cli(
+    #     ["docker", "inspect", image_tag, "--format", "json"],
+    # )
+    # digest_tag = f"{image_tag.split(':', 1)[0]}@{local_digest}"
+    # local_digest = get_digest_from_cli(
+    #     ["docker", "manifest", "inspect", digest_tag],
+    # )
+
+    # remote_digest = get_digest_from_cli(
+    #     ["docker", "manifest", "inspect", image_tag],
+    # )
+
+    # if (
+    #     local_digest is not None
+    #     and remote_digest is not None
+    #     and local_digest != remote_digest
+    # ):
+    #     confirm = input(
+    #         "🆕 A **NEW** version is available! Do you want to pull the latest? (y/N): "
+    #     )
+    #     if confirm.lower() in ("y", "yes"):
+    #         handle_update(image_tag)
+
+    try:
+        subprocess.run(docker_cmd, check=True)
+    except FileNotFoundError:
+        print(
+            "Error: 'docker' command not found. Ensure Docker is installed and in your PATH.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        # The subprocess will have already printed its stderr.
+        # We exit with the same return code as the docker command.
+        # print(f"Command failed: {docker_cmd}")
+        sys.exit(e.returncode)
+
+
+def strip_suffix_path(a: str | Path, b: str | Path) -> str:
+    """
+    Removes the path suffix 'b' from path 'a'.
+    Returns a string.
+    Preserves '~' if present, and contracts absolute paths to '~' if they match the home directory.
+
+    Example:
+        strip_suffix_path("/home/user/project/src", "src") -> "~/project"
+        strip_suffix_path("~/a/b", "b") -> "~/a"
+    """
+    a_str = str(a)
+    b_str = str(b)
+
+    # Detect path flavor: use Windows logic if backslashes are present or if running on Windows
+    # (checking backslashes first allows handling Windows paths on Linux)
+    is_win = "\\" in a_str or "\\" in b_str or os.name == "nt"
+    PureCls = PureWindowsPath if is_win else PurePosixPath
+
+    a_pure = PureCls(a_str)
+    b_pure = PureCls(b_str)
+
+    # 1. Strip the suffix
+    b_len = len(b_pure.parts)
+    if (
+        b_len > 0
+        and b_len <= len(a_pure.parts)
+        and a_pure.parts[-b_len:] == b_pure.parts
+    ):
+        remaining = a_pure.parts[:-b_len]
+        if not remaining:
+            return "."
+        res_pure = PureCls(*remaining)
+    else:
+        res_pure = a_pure
+
+    res_str = str(res_pure)
+
+    # 2. Contract to '~' if the path is absolute and matches the current user's home.
+    # We can only do this reliably if the path flavor matches the current OS.
+    if is_win == (os.name == "nt"):
+        try:
+            # Resolve to a concrete Path object to check against home
+            p = Path(res_str)
+            if p.is_absolute():
+                home = Path.home()
+                # relative_to throws ValueError if p is not inside home
+                rel = p.relative_to(home)
+                return str(Path("~") / rel)
+        except ValueError:
+            # Path is not inside home directory
+            pass
+
+    return res_str

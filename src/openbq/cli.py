@@ -1,0 +1,58 @@
+import argparse
+
+from openbq.utils import handle_uninstall, handle_update, run_container, show_version
+
+IMAGE_NAME = "ghcr.io/open-source-biometric-quality-framework/bqcore-service:latest"
+
+
+def main() -> None:
+    """Main execution function for the script."""
+    parser = argparse.ArgumentParser(
+        description="openbq command-line interface.",
+        add_help=False,  # Will be passed to the container
+    )
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="store_true",
+        help="Show version information.",
+    )
+    parser.add_argument(
+        "--update",
+        "-U",
+        action="store_true",
+        help="Check for and pull updates to the container image.",
+    )
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Uninstall the CLI and remove the container image.",
+    )
+    parser.add_argument(
+        "--tag",
+        help="Specify container image tag.",
+    )
+    parser.add_argument(
+        "--shm",
+        help="Specify shared memory size for the container (e.g., 8192MB).",
+    )
+
+    args, unknown_args = parser.parse_known_args()
+
+    if not args.tag:
+        image_tag = IMAGE_NAME
+    else:
+        image_tag = args.tag
+
+    if args.version:
+        show_version(image_tag)
+    elif args.update:
+        handle_update(image_tag)
+    elif args.uninstall:
+        handle_uninstall(image_tag)
+    else:
+        run_container(image_tag, unknown_args, args.shm)
+
+
+if __name__ == "__main__":
+    main()

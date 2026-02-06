@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+    - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pypi-publish:
+    name: Build and Publish Wheel to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+    - name: Publish package distributions to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-publish:
+    name: Build and Publish Wheel and Bin to Github Release
+    runs-on: ubuntu-latest
+    needs: merge
+    permissions:
+      contents: write
+    steps:
+    - name: ⬇️ Checkout Repository
+      uses: actions/checkout@v6
+    - name: 🐍 Install uv and Python
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "0.9.30"
+        python-version: '3.14'
+    - name: 🛠️ Build Wheel and Binary EXE
+      run: |
+        uv build --wheel
+        uv sync --locked --group dev
+        uv run pyinstaller -F src/openbq/cli.py -n openbq
+    - name: 🚀 Upload Release Assets (Wheels/EXE)
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          dist/*.whl
+          dist/openbq
