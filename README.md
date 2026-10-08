@@ -1,5 +1,6 @@
 # bqConnect CLI
 
+[![Release](https://github.com/Open-Source-Biometric-Quality-Framework/bqConnect-CLI/actions/workflows/release.yml/badge.svg)](https://github.com/Open-Source-Biometric-Quality-Framework/bqConnect-CLI/actions/workflows/release.yml)
 [![PyPI - Version](https://img.shields.io/pypi/v/openbq)](https://pypi.python.org/pypi/openbq)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/openbq)](https://pypi.python.org/pypi/openbq)
 [![PyPI - Format](https://img.shields.io/pypi/format/openbq)](https://pypi.python.org/pypi/openbq)
