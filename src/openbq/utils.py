@@ -382,7 +382,7 @@ def handle_uninstall(image_tag):
 def show_version(image_tag):
     """Displays the version of the CLI and the container image."""
     # Version of the CLI app
-    print(f"openbq: v{__version__}")
+    print(f"OpenBQ CLI: v{__version__}")
     # Version of the container image
     try:
         result = subprocess.run(
@@ -451,6 +451,9 @@ def run_container(image_tag, bq_args: list[str], shm_size=None):
     # Optional prefix to reconstruct the file path
     input_prefix = ""
 
+    input_path = None
+    output_path = None
+
     # Check input folder flag
     for item in bq_args:
         if item in ("-I", "--input"):
@@ -464,7 +467,6 @@ def run_container(image_tag, bq_args: list[str], shm_size=None):
             input_path = Path(Path(input_path_raw).expanduser().resolve())
             bq_args.remove(item)
             break
-        input_path = None
 
     if input_path:
         # Sanitise input path
