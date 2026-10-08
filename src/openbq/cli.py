@@ -45,6 +45,7 @@ def main() -> None:
         image_tag = args.tag
 
     if args.version:
+        run_container(image_tag, ["--info"])
         show_version(image_tag)
     elif args.update:
         handle_update(image_tag)
